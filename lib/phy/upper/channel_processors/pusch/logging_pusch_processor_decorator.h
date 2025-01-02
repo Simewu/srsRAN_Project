@@ -26,6 +26,8 @@
 #include "srsran/phy/upper/channel_processors/pusch/formatters.h"
 #include "srsran/phy/upper/unique_rx_buffer.h"
 #include "srsran/support/format/fmt_optional.h"
+#include <chrono>
+#include <mutex>
 
 namespace fmt {
 
@@ -104,7 +106,10 @@ public:
     results.uci.reset();
 
     processor->process(data, std::move(rm_buffer), *this, grid, pdu);
-    time_return = std::chrono::steady_clock::now();
+    {
+      std::lock_guard<std::mutex> lock(time_return_mutex);
+      time_return = std::chrono::steady_clock::now();
+    }
   }
 
 private:
@@ -139,7 +144,11 @@ private:
 
     // Calculate the return latency if available.
     std::chrono::nanoseconds                           time_return_ns(0);
-    std::chrono::time_point<std::chrono::steady_clock> time_return_local = time_return.load();
+    std::chrono::time_point<std::chrono::steady_clock> time_return_local;
+    {
+      std::lock_guard<std::mutex> lock(time_return_mutex);
+      time_return_local = time_return;
+    }
     if (time_return_local != std::chrono::time_point<std::chrono::steady_clock>()) {
       time_return_ns = time_return_local - time_start;
     }
@@ -184,6 +193,7 @@ private:
     // Notify the SCH reception.
     notifier_->on_sch(sch);
   }
+  std::mutex time_return_mutex;
 
   srslog::basic_logger&                                           logger;
   std::unique_ptr<pusch_processor>                                processor;
@@ -192,11 +202,10 @@ private:
   pusch_processor_result_notifier*                                notifier;
   std::chrono::time_point<std::chrono::steady_clock>              time_start;
   std::chrono::time_point<std::chrono::steady_clock>              time_uci;
-  std::atomic<std::chrono::time_point<std::chrono::steady_clock>> time_return;
+  std::chrono::time_point<std::chrono::steady_clock>              time_return;
   fmt::pusch_results_wrapper                                      results;
 
-  // Makes sure atomics are lock free.
-  static_assert(std::atomic<decltype(time_return)>::is_always_lock_free);
+  // PDU exchange no longer lock free: static_assert(std::atomic<decltype(time_return)>::is_always_lock_free);
 };
 
 } // namespace srsran
